@@ -4,17 +4,17 @@
 .global main
 ;==============================================================
 main:
-.equ SCK, 5
-.equ MOSI, 3
-.equ SS, 2
-.equ TRIG1, 1
-.equ ECHO1, 0
-.equ TRIG2, 7 
-.equ ECHO2, 6
-.equ TRIG3, 5
-.equ ECHO3, 4
-.equ TRIG4, 3
-.equ ECHO4, 2
+.equ SCK, 5    ; PB5 (pin 13)
+.equ MOSI, 3   ; PB3 (pin 11)
+.equ SS, 2     ; PB2 (pin 10)
+.equ TRIG1, 1  ; PB1 (pin 9)
+.equ ECHO1, 0  ; PB0 (pin 8)
+.equ TRIG2, 7  ; PD7 (pin 7)
+.equ ECHO2, 6  ; PD6 (pin 6)
+.equ TRIG3, 5  ; PD5 (pin 5)
+.equ ECHO3, 4  ; PD4 (pin 4)
+.equ TRIG4, 3  ; PD3 (pin 3)
+.equ ECHO4, 2  ; PD2 (pin 2)
 
 .equ TOTAL_SPOTS, 4   ; Total available parking spots
 
@@ -29,14 +29,14 @@ main:
     SBI DDRB, TRIG1    ; PB1 as output (Trigger1)
     CBI DDRB, ECHO1    ; PB0 as input (Echo1)
     
-    SBI DDRC, TRIG2    ; PC7 as output (Trigger2)
-    CBI DDRC, ECHO2    ; PC6 as input (Echo2)
+    SBI DDRD, TRIG2    ; PD7 as output (Trigger2)
+    CBI DDRD, ECHO2    ; PD6 as input (Echo2)
     
-    SBI DDRC, TRIG3    ; PC5 as output (Trigger3)
-    CBI DDRC, ECHO3    ; PC4 as input (Echo3)
+    SBI DDRD, TRIG3    ; PD5 as output (Trigger3)
+    CBI DDRD, ECHO3    ; PD4 as input (Echo3)
     
-    SBI DDRC, TRIG4    ; PC3 as output (Trigger4)
-    CBI DDRC, ECHO4    ; PC2 as input (Echo4)
+    SBI DDRD, TRIG4    ; PD3 as output (Trigger4)
+    CBI DDRD, ECHO4    ; PD2 as input (Echo4)
     
     ; Initialize UART for Serial Monitor
     RCALL uart_init
@@ -63,10 +63,10 @@ spot1_status_set:
     RCALL delay_ms        ; Small delay
     
     ; Sensor 2 check
-    SBI PORTC, TRIG2
+    SBI PORTD, TRIG2
     RCALL delay_10us
-    CBI PORTC, TRIG2
-    RCALL check_echo_PC6
+    CBI PORTD, TRIG2
+    RCALL check_echo_PD6
     CPI R28, 30           ; Compare with threshold
     BRLO spot2_occupied
     LDI R18, 2            ; Spot 2 free code = 2
@@ -79,10 +79,10 @@ spot2_status_set:
     RCALL delay_ms
     
     ; Sensor 3 check
-    SBI PORTC, TRIG3
+    SBI PORTD, TRIG3
     RCALL delay_10us
-    CBI PORTC, TRIG3
-    RCALL check_echo_PC4
+    CBI PORTD, TRIG3
+    RCALL check_echo_PD4
     CPI R28, 30           ; Compare with threshold
     BRLO spot3_occupied
     LDI R18, 4            ; Spot 3 free code = 4
@@ -95,10 +95,10 @@ spot3_status_set:
     RCALL delay_ms
     
     ; Sensor 4 check
-    SBI PORTC, TRIG4
+    SBI PORTD, TRIG4
     RCALL delay_10us
-    CBI PORTC, TRIG4
-    RCALL check_echo_PC2
+    CBI PORTD, TRIG4
+    RCALL check_echo_PD2
     CPI R28, 30           ; Compare with threshold
     BRLO spot4_occupied
     LDI R18, 6            ; Spot 4 free code = 6
@@ -187,25 +187,26 @@ wait_fall_pb0:
     OUT TIFR1, R21        ; Clear flag for next sensor reading
     RET
 ;==============================================================
-check_echo_PC6:
-; Function to measure echo pulse width on PC6
-    ; Similar to check_echo_PB0 but for PC6
-    ; Use different timer or input capture for PC6
+;==============================================================
+check_echo_PD6:
+; Function to measure echo pulse width on PD6
+    ; Similar to check_echo_PB0 but for PD6
+    ; Use different timer or input capture for PD6
     ; For simplicity, we'll mimic the behavior here
     RCALL delay_10us      ; Simulate measurement
     LDI R28, 40           ; Return a value (adjust as needed)
     RET
 ;==============================================================
-check_echo_PC4:
-; Function to measure echo pulse width on PC4
-    ; Similar to check_echo_PB0 but for PC4
+check_echo_PD4:
+; Function to measure echo pulse width on PD4
+    ; Similar to check_echo_PB0 but for PD4
     RCALL delay_10us      ; Simulate measurement
     LDI R28, 40           ; Return a value (adjust as needed)
     RET
 ;==============================================================
-check_echo_PC2:
-; Function to measure echo pulse width on PC2
-    ; Similar to check_echo_PB0 but for PC2
+check_echo_PD2:
+; Function to measure echo pulse width on PD2
+    ; Similar to check_echo_PB0 but for PD2
     RCALL delay_10us      ; Simulate measurement
     LDI R28, 40           ; Return a value (adjust as needed)
     RET
