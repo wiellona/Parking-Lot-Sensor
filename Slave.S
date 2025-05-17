@@ -9,39 +9,272 @@ main:
     LDI R17, 0b00001100   ; PD2-PD3 as outputs (for spot 1 LEDs)
     OUT DDRD, R17
     
-    ; Initialize all LEDs as OFF
-    LDI R17, 0b00000000
+    ; Initialize all LEDs - turn on green LED initially
+    LDI R17, 0b00001000   ; PD3 (green LED) ON, PD2 (red LED) OFF
     OUT PORTD, R17
+    
+    ; Initialize UART for serial monitor
+    RCALL uart_init
+    
+    ; Send welcome message
+    LDI ZL, lo8(welcome_msg)
+    LDI ZH, hi8(welcome_msg)
+    RCALL print_string
+    RCALL print_newline
+    
+    ; Debug pin configuration
+    LDI ZL, lo8(pins_config_msg)
+    LDI ZH, hi8(pins_config_msg)
+    RCALL print_string
+    IN R18, DDRD
+    RCALL print_number
+    RCALL print_newline
+    
+    ; Debug initial LED state
+    IN R18, PORTD
+    LDI ZL, lo8(init_led_msg)
+    LDI ZH, hi8(init_led_msg)
+    RCALL print_string
+    RCALL print_number
+    RCALL print_newline
     
     ; Enable SPI as slave
     LDI R17, (1<<SPE)
     OUT SPCR, R17
 ;--------------------------------------------------------------
 wait_data:
+    LDI ZL, lo8(waiting_msg)
+    LDI ZH, hi8(waiting_msg)
+    RCALL print_string
+    RCALL print_newline
+    
+    ; Wait for SPI data
     IN R18, SPSR
     SBRS R18, SPIF        ; Wait for byte reception
     RJMP wait_data        ; to complete
     
-    IN R18, SPDR          ; Get received byte from data register
+    ; Get the received data
+    IN R25, SPDR          ; Get received byte from data register to R25
+    
+    ; Print received data to serial monitor
+    LDI ZL, lo8(received_msg)
+    LDI ZH, hi8(received_msg)
+    RCALL print_string
+    MOV R18, R25          ; Copy received data to R18 for printing
+    RCALL print_number    ; Print the received value
+    RCALL print_newline
     
     ; Process received data
-    ; Parking spot 1 status
-    CPI R18, 0            ; Spot 1 free
-    BREQ spot1_free
-    CPI R18, 1            ; Spot 1 occupied
-    BREQ spot1_occupied
+    CPI R25, 0            ; Compare with 0 (spot free)
+    BREQ set_spot_free
+    CPI R25, 1            ; Compare with 1 (spot occupied)
+    BREQ set_spot_occupied
     
-    RJMP wait_data        ; Invalid data, wait for next byte
+    ; Invalid data received
+    LDI ZL, lo8(invalid_msg)
+    LDI ZH, hi8(invalid_msg)
+    RCALL print_string
+    RCALL print_newline
+    RJMP wait_data
     
 ;--------------------------------------------------------------
-; Handle Parking Spot 1
-spot1_free:
-    CBI PORTD, 2          ; Turn off red LED for spot 1
-    SBI PORTD, 3          ; Turn on green LED for spot 1
+set_spot_free:
+    ; Free state - red OFF, green ON
+    LDI ZL, lo8(setting_free_msg)
+    LDI ZH, hi8(setting_free_msg)
+    RCALL print_string
+    RCALL print_newline
+    
+    ; Turn off red LED (PD2)
+    CBI PORTD, 2
+    ; Turn on green LED (PD3)
+    SBI PORTD, 3
+    
+    ; Verify LED state
+    IN R18, PORTD
+    LDI ZL, lo8(new_led_msg)
+    LDI ZH, hi8(new_led_msg)
+    RCALL print_string
+    RCALL print_number
+    RCALL print_newline
+    
+    ; Display status message
+    LDI ZL, lo8(free_msg)
+    LDI ZH, hi8(free_msg)
+    RCALL print_string
+    RCALL print_newline
+    RCALL print_newline
+    
+    ; Clear SPI interrupt flag
+    IN R18, SPSR          ; Read SPSR to clear SPIF
     RJMP wait_data
     
-spot1_occupied:
-    SBI PORTD, 2          ; Turn on red LED for spot 1
-    CBI PORTD, 3          ; Turn off green LED for spot 1
+;--------------------------------------------------------------
+set_spot_occupied:
+    ; Occupied state - red ON, green OFF
+    LDI ZL, lo8(setting_occupied_msg)
+    LDI ZH, hi8(setting_occupied_msg)
+    RCALL print_string
+    RCALL print_newline
+    
+    ; Turn on red LED (PD2)
+    SBI PORTD, 2
+    ; Turn off green LED (PD3)
+    CBI PORTD, 3
+    
+    ; Verify LED state
+    IN R18, PORTD
+    LDI ZL, lo8(new_led_msg)
+    LDI ZH, hi8(new_led_msg)
+    RCALL print_string
+    RCALL print_number
+    RCALL print_newline
+    
+    ; Display status message
+    LDI ZL, lo8(occupied_msg)
+    LDI ZH, hi8(occupied_msg)
+    RCALL print_string
+    RCALL print_newline
+    RCALL print_newline
+    
+    ; Clear SPI interrupt flag
+    IN R18, SPSR          ; Read SPSR to clear SPIF
     RJMP wait_data
+
+;==============================================================
+; UART Functions
+;==============================================================
+uart_init:
+; Initialize UART for 9600 baud rate
+    LDI R17, 103          ; For 9600 baud @16MHz
+    STS UBRR0L, R17
+    LDI R17, 0
+    STS UBRR0H, R17
+    
+    LDI R17, (1<<TXEN0)   ; Enable transmitter
+    STS UCSR0B, R17
+    
+    LDI R17, (1<<UCSZ01)|(1<<UCSZ00) ; 8-bit data
+    STS UCSR0C, R17
+    RET
+;==============================================================
+send_char:
+; Send single character in R18 to UART
+    PUSH R19
+wait_tx_ready:
+    LDS R19, UCSR0A
+    SBRS R19, UDRE0       ; Wait if buffer is full
+    RJMP wait_tx_ready
+    
+    STS UDR0, R18         ; Send data
+    POP R19
+    RET
+;==============================================================
+print_string:
+; Print null-terminated string pointed to by Z register
+    PUSH R18
+print_string_loop:
+    LPM R18, Z+           ; Load character from program memory
+    CPI R18, 0            ; Check for null terminator
+    BREQ print_string_done
+    RCALL send_char       ; Send character
+    RJMP print_string_loop
+print_string_done:
+    POP R18
+    RET
+;==============================================================
+print_number:
+; Print number in R18 (0-255)
+    PUSH R18
+    PUSH R19
+    
+    CPI R18, 100          ; Check if number >= 100
+    BRLO tens_digit       ; If less than 100, skip to tens digit
+    
+    ; Print hundreds digit
+    LDI R19, '0'          ; Start with '0'
+hundreds_loop:
+    CPI R18, 100          ; Check if >= 100
+    BRLO hundreds_done    ; If < 100, done with hundreds
+    SUBI R18, 100         ; Subtract 100
+    INC R19               ; Increment digit
+    RJMP hundreds_loop    ; Continue loop
+hundreds_done:
+    PUSH R18              ; Save remainder
+    MOV R18, R19          ; Move hundreds digit to R18
+    RCALL send_char       ; Print hundreds digit
+    POP R18               ; Restore remainder
+    
+tens_digit:
+    CPI R18, 10           ; Check if number >= 10
+    BRLO ones_digit       ; If less than 10, skip to ones digit
+    
+    ; Print tens digit
+    LDI R19, '0'          ; Start with '0'
+tens_loop:
+    CPI R18, 10           ; Check if >= 10
+    BRLO tens_done        ; If < 10, done with tens
+    SUBI R18, 10          ; Subtract 10
+    INC R19               ; Increment digit
+    RJMP tens_loop        ; Continue loop
+tens_done:
+    PUSH R18              ; Save remainder
+    MOV R18, R19          ; Move tens digit to R18
+    RCALL send_char       ; Print tens digit
+    POP R18               ; Restore remainder
+    
+ones_digit:
+    ; Print ones digit
+    SUBI R18, -'0'        ; Convert to ASCII
+    RCALL send_char       ; Print ones digit
+    
+    POP R19
+    POP R18
+    RET
+;==============================================================
+print_newline:
+; Print newline and carriage return
+    PUSH R18
+    LDI R18, 0x0D         ; Carriage return
+    RCALL send_char
+    LDI R18, 0x0A         ; Line feed
+    RCALL send_char
+    POP R18
+    RET
+;==============================================================
+
+; String constants
+welcome_msg:
+    .ascii "Parking Spot Monitor Slave Started"
+    .byte 0
+received_msg:
+    .ascii "Received data from master: "
+    .byte 0
+free_msg:
+    .ascii "Spot status: FREE (Green LED ON)"
+    .byte 0
+occupied_msg:
+    .ascii "Spot status: OCCUPIED (Red LED ON)"
+    .byte 0
+invalid_msg:
+    .ascii "Invalid data received"
+    .byte 0
+pins_config_msg:
+    .ascii "DDRD configuration: "
+    .byte 0
+init_led_msg:
+    .ascii "Initial LED state (PORTD): "
+    .byte 0
+new_led_msg:
+    .ascii "Updated LED state (PORTD): "
+    .byte 0
+setting_free_msg:
+    .ascii "Setting LEDs for FREE state (Red OFF, Green ON)"
+    .byte 0
+setting_occupied_msg:
+    .ascii "Setting LEDs for OCCUPIED state (Red ON, Green OFF)"
+    .byte 0
+waiting_msg:
+    .ascii "Waiting for data from master..."
+    .byte 0
 ;==============================================================
