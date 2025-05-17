@@ -16,6 +16,10 @@ main:
     ; Initialize UART for Serial Monitor first
     RCALL uart_init
     
+    ; Initialize R19 and R26 for status comparison (status change detection)
+    LDI R19, 0xFF        ; Initial current status (invalid to force first message)
+    LDI R26, 0           ; Initial previous status
+    
     ; Print welcome message to serial monitor
     LDI ZL, lo8(welcome_msg)
     LDI ZH, hi8(welcome_msg)
@@ -61,17 +65,8 @@ main:
     
 ;--------------------------------------------------------------
 main_loop:
-    ; Print separator for clarity
-    LDI ZL, lo8(separator_msg)
-    LDI ZH, hi8(separator_msg)
-    RCALL print_string
-    RCALL print_newline
-
-    ; Sensor 1 check
-    LDI ZL, lo8(checking_sensor_msg)
-    LDI ZH, hi8(checking_sensor_msg)
-    RCALL print_string
-    RCALL print_newline
+    ; Store previous status in R26 for comparison later
+    MOV R26, R19  ; Save the previous status
     
     ; Generate trigger pulse for sensor
     SBI PORTB, TRIG1       ; Set trigger high
@@ -80,6 +75,37 @@ main_loop:
     
     ; Measure echo pulse
     RCALL check_echo_PB0
+    
+    ; Check if spot is occupied
+    CPI R28, 30           ; Compare with threshold (30cm)
+    BRSH spot1_free       ; If distance >= 30cm, spot is free
+    
+    ; Spot is occupied (distance < 30cm)
+    LDI R18, 1            ; Spot occupied code = 1
+    RJMP spot1_status_set
+    
+spot1_free:
+    LDI R18, 0            ; Spot free code = 0
+    
+spot1_status_set:
+    ; Save status value for later use
+    MOV R19, R18
+    
+    ; Only print info if the status has changed
+    CP R19, R26
+    BREQ skip_status_print  ; Skip printing if status hasn't changed
+    
+    ; Print separator for clarity
+    LDI ZL, lo8(separator_msg)
+    LDI ZH, hi8(separator_msg)
+    RCALL print_string
+    RCALL print_newline
+    
+    ; Print change notification
+    LDI ZL, lo8(status_change_msg)
+    LDI ZH, hi8(status_change_msg)
+    RCALL print_string
+    RCALL print_newline
     
     ; Print distance to serial monitor
     LDI ZL, lo8(distance_msg)
@@ -95,42 +121,25 @@ main_loop:
     RCALL send_char
     RCALL print_newline
     
-    ; Debug raw sensor value
-    LDI ZL, lo8(raw_sensor_msg)
-    LDI ZH, hi8(raw_sensor_msg)
+    ; Print spot status based on R19
+    CPI R19, 1
+    BREQ print_occupied
+    
+    ; Print free status
+    LDI ZL, lo8(free_msg)
+    LDI ZH, hi8(free_msg)
     RCALL print_string
-    MOV R18, R28
-    RCALL print_number
     RCALL print_newline
+    RJMP status_printed
     
-    ; Check if spot is occupied
-    CPI R28, 30           ; Compare with threshold (30cm)
-    BRSH spot1_free       ; If distance >= 30cm, spot is free
-    
-    ; Spot is occupied (distance < 30cm)
-    LDI R18, 1            ; Spot occupied code = 1
-    
-    ; Print spot status
+print_occupied:
+    ; Print occupied status
     LDI ZL, lo8(occupied_msg)
     LDI ZH, hi8(occupied_msg)
     RCALL print_string
     RCALL print_newline
     
-    RJMP spot1_status_set
-    
-spot1_free:
-    LDI R18, 0            ; Spot free code = 0
-    
-    ; Print spot status
-    LDI ZL, lo8(free_msg)
-    LDI ZH, hi8(free_msg)
-    RCALL print_string
-    RCALL print_newline
-    
-spot1_status_set:
-    ; Save status value for later use
-    MOV R19, R18
-    
+status_printed:
     ; Debug print the value being sent via SPI
     LDI ZL, lo8(sending_msg)
     LDI ZH, hi8(sending_msg)
@@ -139,7 +148,8 @@ spot1_status_set:
     RCALL print_number
     RCALL print_newline
     
-    ; Send status to slave via SPI
+skip_status_print:
+      ; Send status to slave via SPI
     MOV R18, R19          ; Restore value to R18 for SPI
     RCALL send_spi        ; Send to slave
     
@@ -152,6 +162,10 @@ spot1_status_set:
     DEC R24               ; Decrease available spots if occupied
     
 send_to_monitor:
+    ; Only print available spots if status changed
+    CP R19, R26
+    BREQ skip_available_print
+    
     ; Print available spots message
     LDI ZL, lo8(available_msg)
     LDI ZH, hi8(available_msg)
@@ -162,7 +176,8 @@ send_to_monitor:
     RCALL print_number    ; Print available spots count
     RCALL print_newline
     
-    RCALL delay_500ms     ; Delay before next loop
+skip_available_print:
+    RCALL delay_1000ms    ; Longer delay before next loop
     RJMP main_loop
     
 ;==============================================================
@@ -172,6 +187,10 @@ send_spi:
     PUSH R19
     PUSH R20
 
+    ; Only print debug messages if status changed
+    CP R19, R26
+    BREQ skip_spi_debug_msg
+    
     ; Debug message
     MOV R20, R18          ; Preserve data byte
     LDI ZL, lo8(spi_sending_msg)
@@ -180,7 +199,12 @@ send_spi:
     MOV R18, R20
     RCALL print_number
     RCALL print_newline
+    RJMP continue_spi
     
+skip_spi_debug_msg:
+    MOV R20, R18          ; Preserve data byte
+    
+continue_spi:
     CBI PORTB, SS         ; Enable slave device (SS low)
     
     OUT SPDR, R20         ; Transmit byte to slave
@@ -192,12 +216,17 @@ spi_wait:
     
     SBI PORTB, SS         ; Disable slave device (SS high)
     
+    ; Only print debug messages if status changed
+    CP R19, R26
+    BREQ skip_spi_complete_msg
+    
     ; Debug message
     LDI ZL, lo8(spi_complete_msg)
     LDI ZH, hi8(spi_complete_msg)
     RCALL print_string
     RCALL print_newline
     
+skip_spi_complete_msg:
     POP R20
     POP R19
     RET
@@ -375,6 +404,13 @@ d6: DEC R23
     DEC R21
     BRNE d4
     RET
+    
+;==============================================================
+delay_1000ms:
+; Longer delay (1000 milliseconds)
+    RCALL delay_500ms
+    RCALL delay_500ms
+    RET
 ;==============================================================
 
 ; String constants
@@ -416,5 +452,8 @@ checking_sensor_msg:
     .byte 0
 separator_msg:
     .ascii "----------------------------------------"
+    .byte 0
+status_change_msg:
+    .ascii "STATUS CHANGED!"
     .byte 0
 ;==============================================================

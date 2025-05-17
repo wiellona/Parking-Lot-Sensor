@@ -38,15 +38,17 @@ main:
     RCALL print_number
     RCALL print_newline
     
+    ; Initialize R24 and R25 for status comparison
+    LDI R24, 0xFF        ; Initial previous value (invalid to force first message)
+    LDI R25, 0           ; Default current value
+    
     ; Enable SPI as slave
     LDI R17, (1<<SPE)
     OUT SPCR, R17
 ;--------------------------------------------------------------
 wait_data:
-    LDI ZL, lo8(waiting_msg)
-    LDI ZH, hi8(waiting_msg)
-    RCALL print_string
-    RCALL print_newline
+    ; Store previous data for comparison
+    MOV R24, R25          ; Save previous value to R24
     
     ; Wait for SPI data
     IN R18, SPSR
@@ -56,6 +58,16 @@ wait_data:
     ; Get the received data
     IN R25, SPDR          ; Get received byte from data register to R25
     
+    ; Only print if the data changed
+    CP R25, R24
+    BREQ skip_waiting_print
+    
+    ; Print waiting message and received data only when it changes
+    LDI ZL, lo8(waiting_msg)
+    LDI ZH, hi8(waiting_msg)
+    RCALL print_string
+    RCALL print_newline
+    
     ; Print received data to serial monitor
     LDI ZL, lo8(received_msg)
     LDI ZH, hi8(received_msg)
@@ -64,31 +76,47 @@ wait_data:
     RCALL print_number    ; Print the received value
     RCALL print_newline
     
+skip_waiting_print:
+    
     ; Process received data
     CPI R25, 0            ; Compare with 0 (spot free)
     BREQ set_spot_free
     CPI R25, 1            ; Compare with 1 (spot occupied)
     BREQ set_spot_occupied
+      ; Only print invalid message if the data changed
+    CP R25, R24
+    BREQ skip_invalid_print
     
     ; Invalid data received
     LDI ZL, lo8(invalid_msg)
     LDI ZH, hi8(invalid_msg)
     RCALL print_string
     RCALL print_newline
+    
+skip_invalid_print:
     RJMP wait_data
     
 ;--------------------------------------------------------------
 set_spot_free:
+    ; Only print messages if data changed
+    CP R25, R24
+    BREQ skip_free_print
+    
     ; Free state - red OFF, green ON
     LDI ZL, lo8(setting_free_msg)
     LDI ZH, hi8(setting_free_msg)
     RCALL print_string
     RCALL print_newline
     
+skip_free_print:
     ; Turn off red LED (PD2)
     CBI PORTD, 2
     ; Turn on green LED (PD3)
     SBI PORTD, 3
+    
+    ; Only print debug info if data changed
+    CP R25, R24
+    BREQ skip_free_debug
     
     ; Verify LED state
     IN R18, PORTD
@@ -105,22 +133,32 @@ set_spot_free:
     RCALL print_newline
     RCALL print_newline
     
+skip_free_debug:
     ; Clear SPI interrupt flag
     IN R18, SPSR          ; Read SPSR to clear SPIF
     RJMP wait_data
     
 ;--------------------------------------------------------------
 set_spot_occupied:
+    ; Only print messages if data changed
+    CP R25, R24
+    BREQ skip_occupied_print
+    
     ; Occupied state - red ON, green OFF
     LDI ZL, lo8(setting_occupied_msg)
     LDI ZH, hi8(setting_occupied_msg)
     RCALL print_string
     RCALL print_newline
     
+skip_occupied_print:
     ; Turn on red LED (PD2)
     SBI PORTD, 2
     ; Turn off green LED (PD3)
     CBI PORTD, 3
+    
+    ; Only print debug info if data changed
+    CP R25, R24
+    BREQ skip_occupied_debug
     
     ; Verify LED state
     IN R18, PORTD
@@ -137,6 +175,7 @@ set_spot_occupied:
     RCALL print_newline
     RCALL print_newline
     
+skip_occupied_debug:
     ; Clear SPI interrupt flag
     IN R18, SPSR          ; Read SPSR to clear SPIF
     RJMP wait_data
