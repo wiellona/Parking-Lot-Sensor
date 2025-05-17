@@ -1,4 +1,3 @@
-
 #define __SFR_OFFSET 0x00
 #include "avr/io.h"
 ;------------------------
@@ -6,8 +5,8 @@
 ;==============================================================
 main:
 ;--------------------------------------------------------------
-    ; Configure PORTD for outputs (LEDs and buzzers)
-    LDI R17, 0b11111100   ; PD2-PD7 as outputs
+    ; Configure PORTD for outputs (LEDs)
+    LDI R17, 0b00001100   ; PD2-PD3 as outputs (for spot 1 LEDs)
     OUT DDRD, R17
     
     ; Initialize all LEDs as OFF
@@ -32,24 +31,6 @@ wait_data:
     CPI R18, 1            ; Spot 1 occupied
     BREQ spot1_occupied
     
-    ; Parking spot 2 status
-    CPI R18, 2            ; Spot 2 free
-    BREQ spot2_free
-    CPI R18, 3            ; Spot 2 occupied
-    BREQ spot2_occupied
-    
-    ; Parking spot 3 status
-    CPI R18, 4            ; Spot 3 free
-    BREQ spot3_free
-    CPI R18, 5            ; Spot 3 occupied
-    BREQ spot3_occupied
-    
-    ; Parking spot 4 status
-    CPI R18, 6            ; Spot 4 free
-    BREQ spot4_free
-    CPI R18, 7            ; Spot 4 occupied
-    BREQ spot4_occupied
-    
     RJMP wait_data        ; Invalid data, wait for next byte
     
 ;--------------------------------------------------------------
@@ -62,41 +43,5 @@ spot1_free:
 spot1_occupied:
     SBI PORTD, 2          ; Turn on red LED for spot 1
     CBI PORTD, 3          ; Turn off green LED for spot 1
-    RJMP wait_data
-    
-;--------------------------------------------------------------
-; Handle Parking Spot 2
-spot2_free:
-    CBI PORTD, 4          ; Turn off red LED for spot 2
-    SBI PORTD, 5          ; Turn on green LED for spot 2
-    RJMP wait_data
-    
-spot2_occupied:
-    SBI PORTD, 4          ; Turn on red LED for spot 2
-    CBI PORTD, 5          ; Turn off green LED for spot 2
-    RJMP wait_data
-    
-;--------------------------------------------------------------
-; Handle Parking Spot 3
-spot3_free:
-    CBI PORTD, 6          ; Turn off red LED for spot 3
-    SBI PORTD, 7          ; Turn on green LED for spot 3
-    RJMP wait_data
-    
-spot3_occupied:
-    SBI PORTD, 6          ; Turn on red LED for spot 3
-    CBI PORTD, 7          ; Turn off green LED for spot 3
-    RJMP wait_data
-    
-;--------------------------------------------------------------
-; Handle Parking Spot 4
-spot4_free:
-    CBI PORTB, 0          ; Turn off red LED for spot 4
-    SBI PORTB, 1          ; Turn on green LED for spot 4
-    RJMP wait_data
-    
-spot4_occupied:
-    SBI PORTB, 0          ; Turn on red LED for spot 4
-    CBI PORTB, 1          ; Turn off green LED for spot 4
     RJMP wait_data
 ;==============================================================

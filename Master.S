@@ -9,14 +9,8 @@ main:
 .equ SS, 2     ; PB2 (pin 10)
 .equ TRIG1, 1  ; PB1 (pin 9)
 .equ ECHO1, 0  ; PB0 (pin 8)
-.equ TRIG2, 7  ; PD7 (pin 7)
-.equ ECHO2, 6  ; PD6 (pin 6)
-.equ TRIG3, 5  ; PD5 (pin 5)
-.equ ECHO3, 4  ; PD4 (pin 4)
-.equ TRIG4, 3  ; PD3 (pin 3)
-.equ ECHO4, 2  ; PD2 (pin 2)
 
-.equ TOTAL_SPOTS, 4   ; Total available parking spots
+.equ TOTAL_SPOTS, 1   ; Only one parking spot
 
 ;--------------------------------------------------------------
     ; Initialize SPI as master
@@ -25,18 +19,9 @@ main:
     LDI R17, (1<<SPE)|(1<<MSTR)|(1<<SPI2X)|(1<<SPR0)
     OUT SPCR, R17      ; Enable SPI as master, fsck=fosc/8, SPI mode 0
 ;--------------------------------------------------------------
-    ; Set trigger pins as output and echo pins as input
+    ; Set trigger pin as output and echo pin as input
     SBI DDRB, TRIG1    ; PB1 as output (Trigger1)
     CBI DDRB, ECHO1    ; PB0 as input (Echo1)
-    
-    SBI DDRD, TRIG2    ; PD7 as output (Trigger2)
-    CBI DDRD, ECHO2    ; PD6 as input (Echo2)
-    
-    SBI DDRD, TRIG3    ; PD5 as output (Trigger3)
-    CBI DDRD, ECHO3    ; PD4 as input (Echo3)
-    
-    SBI DDRD, TRIG4    ; PD3 as output (Trigger4)
-    CBI DDRD, ECHO4    ; PD2 as input (Echo4)
     
     ; Initialize UART for Serial Monitor
     RCALL uart_init
@@ -60,81 +45,14 @@ spot1_occupied:
 spot1_status_set:
     MOV R19, R18          ; Save status to R19
     RCALL send_spi        ; Send to slave
-    RCALL delay_ms        ; Small delay
-    
-    ; Sensor 2 check
-    SBI PORTD, TRIG2
-    RCALL delay_10us
-    CBI PORTD, TRIG2
-    RCALL check_echo_PD6
-    CPI R28, 30           ; Compare with threshold
-    BRLO spot2_occupied
-    LDI R18, 2            ; Spot 2 free code = 2
-    RJMP spot2_status_set
-spot2_occupied:
-    LDI R18, 3            ; Spot 2 occupied code = 3
-spot2_status_set:
-    MOV R20, R18          ; Save status to R20
-    RCALL send_spi
-    RCALL delay_ms
-    
-    ; Sensor 3 check
-    SBI PORTD, TRIG3
-    RCALL delay_10us
-    CBI PORTD, TRIG3
-    RCALL check_echo_PD4
-    CPI R28, 30           ; Compare with threshold
-    BRLO spot3_occupied
-    LDI R18, 4            ; Spot 3 free code = 4
-    RJMP spot3_status_set
-spot3_occupied:
-    LDI R18, 5            ; Spot 3 occupied code = 5
-spot3_status_set:
-    MOV R21, R18          ; Save status to R21
-    RCALL send_spi
-    RCALL delay_ms
-    
-    ; Sensor 4 check
-    SBI PORTD, TRIG4
-    RCALL delay_10us
-    CBI PORTD, TRIG4
-    RCALL check_echo_PD2
-    CPI R28, 30           ; Compare with threshold
-    BRLO spot4_occupied
-    LDI R18, 6            ; Spot 4 free code = 6
-    RJMP spot4_status_set
-spot4_occupied:
-    LDI R18, 7            ; Spot 4 occupied code = 7
-spot4_status_set:
-    MOV R22, R18          ; Save status to R22
-    RCALL send_spi
-    RCALL delay_ms
     
     ; Calculate available spots and send to serial monitor
     LDI R24, TOTAL_SPOTS   ; Start with all spots available
     
     ; Check spot 1
     CPI R19, 1
-    BRNE check_spot2
-    DEC R24               ; Decrease available spots
-    
-check_spot2:
-    ; Check spot 2
-    CPI R20, 3
-    BRNE check_spot3
-    DEC R24               ; Decrease available spots
-    
-check_spot3:
-    ; Check spot 3
-    CPI R21, 5
-    BRNE check_spot4
-    DEC R24               ; Decrease available spots
-    
-check_spot4:
-    ; Check spot 4
-    CPI R22, 7
     BRNE send_to_monitor
-    DEC R24               ; Decrease available spots
+    DEC R24               ; Decrease available spots if occupied
     
 send_to_monitor:
     ; Send available spots count to serial monitor
@@ -185,30 +103,6 @@ wait_fall_pb0:
     
     SUB R28, R16          ; Count diff R28 = R28 - R16
     OUT TIFR1, R21        ; Clear flag for next sensor reading
-    RET
-;==============================================================
-;==============================================================
-check_echo_PD6:
-; Function to measure echo pulse width on PD6
-    ; Similar to check_echo_PB0 but for PD6
-    ; Use different timer or input capture for PD6
-    ; For simplicity, we'll mimic the behavior here
-    RCALL delay_10us      ; Simulate measurement
-    LDI R28, 40           ; Return a value (adjust as needed)
-    RET
-;==============================================================
-check_echo_PD4:
-; Function to measure echo pulse width on PD4
-    ; Similar to check_echo_PB0 but for PD4
-    RCALL delay_10us      ; Simulate measurement
-    LDI R28, 40           ; Return a value (adjust as needed)
-    RET
-;==============================================================
-check_echo_PD2:
-; Function to measure echo pulse width on PD2
-    ; Similar to check_echo_PB0 but for PD2
-    RCALL delay_10us      ; Simulate measurement
-    LDI R28, 40           ; Return a value (adjust as needed)
     RET
 ;==============================================================
 uart_init:
