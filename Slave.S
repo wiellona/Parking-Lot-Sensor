@@ -16,31 +16,20 @@ main:
     ; Initialize UART for serial monitor
     RCALL uart_init
     
-    ; Send welcome message
-    LDI ZL, lo8(welcome_msg)
-    LDI ZH, hi8(welcome_msg)
-    RCALL print_string
-    RCALL print_newline
-    
-    ; Debug pin configuration
-    LDI ZL, lo8(pins_config_msg)
-    LDI ZH, hi8(pins_config_msg)
-    RCALL print_string
-    IN R18, DDRD
-    RCALL print_number
-    RCALL print_newline
-    
-    ; Debug initial LED state
-    IN R18, PORTD
-    LDI ZL, lo8(init_led_msg)
-    LDI ZH, hi8(init_led_msg)
-    RCALL print_string
-    RCALL print_number
-    RCALL print_newline
-    
     ; Initialize R24 and R25 for status comparison
     LDI R24, 0xFF        ; Initial previous value (invalid to force first message)
     LDI R25, 0           ; Default current value
+    
+    ; Define total parking spots
+    LDI R23, 1           ; Total parking spots (currently 1)
+    
+    ; Show initial available slots (start with all free)
+    LDI ZL, lo8(available_slots_msg)
+    LDI ZH, hi8(available_slots_msg)
+    RCALL print_string
+    MOV R18, R23          ; Copy total spots to R18 (initially all available)
+    RCALL print_number    ; Print available slots count
+    RCALL print_newline
     
     ; Enable SPI as slave
     LDI R17, (1<<SPE)
@@ -58,124 +47,56 @@ wait_data:
     ; Get the received data
     IN R25, SPDR          ; Get received byte from data register to R25
     
-    ; Only print if the data changed
+    ; Only update display if the data changed
     CP R25, R24
-    BREQ skip_waiting_print
-    
-    ; Print waiting message and received data only when it changes
-    LDI ZL, lo8(waiting_msg)
-    LDI ZH, hi8(waiting_msg)
-    RCALL print_string
-    RCALL print_newline
-    
-    ; Print received data to serial monitor
-    LDI ZL, lo8(received_msg)
-    LDI ZH, hi8(received_msg)
-    RCALL print_string
-    MOV R18, R25          ; Copy received data to R18 for printing
-    RCALL print_number    ; Print the received value
-    RCALL print_newline
-    
-skip_waiting_print:
+    BREQ skip_status_update
     
     ; Process received data
     CPI R25, 0            ; Compare with 0 (spot free)
     BREQ set_spot_free
     CPI R25, 1            ; Compare with 1 (spot occupied)
     BREQ set_spot_occupied
-      ; Only print invalid message if the data changed
-    CP R25, R24
-    BREQ skip_invalid_print
+    RJMP wait_data        ; Invalid data, just wait for next
     
-    ; Invalid data received
-    LDI ZL, lo8(invalid_msg)
-    LDI ZH, hi8(invalid_msg)
-    RCALL print_string
-    RCALL print_newline
-    
-skip_invalid_print:
+skip_status_update:
+    ; Clear SPI interrupt flag
+    IN R18, SPSR          ; Read SPSR to clear SPIF
     RJMP wait_data
     
 ;--------------------------------------------------------------
 set_spot_free:
-    ; Only print messages if data changed
-    CP R25, R24
-    BREQ skip_free_print
-    
-    ; Free state - red OFF, green ON
-    LDI ZL, lo8(setting_free_msg)
-    LDI ZH, hi8(setting_free_msg)
-    RCALL print_string
-    RCALL print_newline
-    
-skip_free_print:
     ; Turn off red LED (PD2)
     CBI PORTD, 2
     ; Turn on green LED (PD3)
     SBI PORTD, 3
     
-    ; Only print debug info if data changed
-    CP R25, R24
-    BREQ skip_free_debug
-    
-    ; Verify LED state
-    IN R18, PORTD
-    LDI ZL, lo8(new_led_msg)
-    LDI ZH, hi8(new_led_msg)
+    ; Calculate available slots and display
+    LDI ZL, lo8(available_slots_msg)
+    LDI ZH, hi8(available_slots_msg)
     RCALL print_string
-    RCALL print_number
+    MOV R18, R23          ; Copy total spots to R18 (all available when free)
+    RCALL print_number    ; Print available slots count
     RCALL print_newline
     
-    ; Display status message
-    LDI ZL, lo8(free_msg)
-    LDI ZH, hi8(free_msg)
-    RCALL print_string
-    RCALL print_newline
-    RCALL print_newline
-    
-skip_free_debug:
     ; Clear SPI interrupt flag
     IN R18, SPSR          ; Read SPSR to clear SPIF
     RJMP wait_data
     
 ;--------------------------------------------------------------
 set_spot_occupied:
-    ; Only print messages if data changed
-    CP R25, R24
-    BREQ skip_occupied_print
-    
-    ; Occupied state - red ON, green OFF
-    LDI ZL, lo8(setting_occupied_msg)
-    LDI ZH, hi8(setting_occupied_msg)
-    RCALL print_string
-    RCALL print_newline
-    
-skip_occupied_print:
     ; Turn on red LED (PD2)
     SBI PORTD, 2
     ; Turn off green LED (PD3)
     CBI PORTD, 3
     
-    ; Only print debug info if data changed
-    CP R25, R24
-    BREQ skip_occupied_debug
-    
-    ; Verify LED state
-    IN R18, PORTD
-    LDI ZL, lo8(new_led_msg)
-    LDI ZH, hi8(new_led_msg)
+    ; Calculate available slots and display
+    LDI ZL, lo8(available_slots_msg)
+    LDI ZH, hi8(available_slots_msg)
     RCALL print_string
-    RCALL print_number
+    CLR R18               ; 0 slots available when occupied
+    RCALL print_number    ; Print available slots count
     RCALL print_newline
     
-    ; Display status message
-    LDI ZL, lo8(occupied_msg)
-    LDI ZH, hi8(occupied_msg)
-    RCALL print_string
-    RCALL print_newline
-    RCALL print_newline
-    
-skip_occupied_debug:
     ; Clear SPI interrupt flag
     IN R18, SPSR          ; Read SPSR to clear SPIF
     RJMP wait_data
@@ -315,5 +236,8 @@ setting_occupied_msg:
     .byte 0
 waiting_msg:
     .ascii "Waiting for data from master..."
+    .byte 0
+available_slots_msg:
+    .ascii "Available parking slot: "
     .byte 0
 ;==============================================================
