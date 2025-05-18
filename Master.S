@@ -1,143 +1,459 @@
-#include <avr/io.h>
-
-; Constants
-.equ N_SLOTS, 4
-.equ THRESHOLD, 147         ; ~5cm
-
-; Start
-.section .text
+#define __SFR_OFFSET 0x00
+#include "avr/io.h"
+;------------------------
 .global main
-
+;==============================================================
 main:
-    ; Initialize USART0 - 9600bps for 16MHz
-    ldi r19, 103
-    sts UBRR0L, r19
-    clr r19
-    sts UBRR0H, r19
-    ldi r19, (1<<TXEN0)
-    sts UCSR0B, r19
+.equ SCK, 5    ; PB5 (pin 13)
+.equ MOSI, 3   ; PB3 (pin 11)
+.equ SS, 2     ; PB2 (pin 10)
+.equ TRIG1, 1  ; PB1 (pin 9)
+.equ ECHO1, 0  ; PB0 (pin 8)
 
-    ; Set PORTD (Trigger) as output
-    ldi r19, 0x0F          ; PD0 - PD3 = trigger
-    out DDRD, r19
+.equ TOTAL_SPOTS, 1   ; Only one parking spot
 
-    ; Set PORTC (Echo) as input
-    clr r19
-    out DDRC, r19
+;--------------------------------------------------------------
+    ; Initialize UART for Serial Monitor first
+    RCALL uart_init
+    
+    ; Initialize R19 and R26 for status comparison (status change detection)
+    LDI R19, 0xFF        ; Initial current status (invalid to force first message)
+    LDI R26, 0           ; Initial previous status
+    
+    ; Print welcome message to serial monitor
+    LDI ZL, lo8(welcome_msg)
+    LDI ZH, hi8(welcome_msg)
+    RCALL print_string
+    RCALL print_newline
 
-    ; Set PORTB as output (LED)
-    ldi r19, 0xFF
-    out DDRB, r19
-
+    ; Initialize SPI as master
+    LDI R17, (1<<MOSI)|(1<<SCK)|(1<<SS)
+    OUT DDRB, R17      ; Set MOSI, SCK, SS as output
+    LDI R17, (1<<SPE)|(1<<MSTR)|(1<<SPI2X)|(1<<SPR0)
+    OUT SPCR, R17      ; Enable SPI as master, fsck=fosc/8, SPI mode 0
+    
+    ; Initial test message
+    LDI ZL, lo8(spi_initialized_msg)
+    LDI ZH, hi8(spi_initialized_msg)
+    RCALL print_string
+    RCALL print_newline
+;--------------------------------------------------------------
+    ; Set trigger pin as output and echo pin as input
+    SBI DDRB, TRIG1    ; PB1 as output (Trigger1)
+    CBI DDRB, ECHO1    ; PB0 as input (Echo1)
+    
+    ; Send a test command to verify SPI is working
+    LDI ZL, lo8(sending_test_msg)
+    LDI ZH, hi8(sending_test_msg)
+    RCALL print_string
+    RCALL print_newline
+    
+    ; Send test value 0 (LED free status)
+    LDI R18, 0
+    RCALL send_spi
+    
+    ; Send test value 1 (LED occupied status)
+    LDI R18, 1
+    RCALL send_spi
+    
+    ; Send test value 0 again (LED free status)
+    LDI R18, 0
+    RCALL send_spi
+    
+    ; Initialize available spot counter
+    LDI R24, TOTAL_SPOTS   ; Start with all spots available
+    
+;--------------------------------------------------------------
 main_loop:
-    clr r18        ; idx = 0
-    clr r16        ; slot_cnt = 0
+    ; Store previous status in R26 for comparison later
+    MOV R26, R19  ; Save the previous status
+    
+    ; Generate trigger pulse for sensor
+    SBI PORTB, TRIG1       ; Set trigger high
+    RCALL delay_10us       ; Wait 10 microseconds
+    CBI PORTB, TRIG1       ; Set trigger low
+    
+    ; Measure echo pulse
+    RCALL check_echo_PB0
+    
+    ; Check if spot is occupied
+    CPI R28, 30           ; Compare with threshold (30cm)
+    BRSH spot1_free       ; If distance >= 30cm, spot is free
+    
+    ; Spot is occupied (distance < 30cm)
+    LDI R18, 1            ; Spot occupied code = 1
+    RJMP spot1_status_set
+    
+spot1_free:
+    LDI R18, 0            ; Spot free code = 0
+    
+spot1_status_set:
+    ; Save status value for later use
+    MOV R19, R18
+    
+    ; Only print info if the status has changed
+    CP R19, R26
+    BREQ skip_status_print  ; Skip printing if status hasn't changed
+    
+    ; Print separator for clarity
+    LDI ZL, lo8(separator_msg)
+    LDI ZH, hi8(separator_msg)
+    RCALL print_string
+    RCALL print_newline
+    
+    ; Print change notification
+    LDI ZL, lo8(status_change_msg)
+    LDI ZH, hi8(status_change_msg)
+    RCALL print_string
+    RCALL print_newline
+    
+    ; Print distance to serial monitor
+    LDI ZL, lo8(distance_msg)
+    LDI ZH, hi8(distance_msg)
+    RCALL print_string
+    
+    MOV R18, R28          ; Copy distance value to R18
+    RCALL print_number    ; Print the distance value
+    
+    LDI R18, 'c'          ; Print 'cm'
+    RCALL send_char
+    LDI R18, 'm'
+    RCALL send_char
+    RCALL print_newline
+    
+    ; Print spot status based on R19
+    CPI R19, 1
+    BREQ print_occupied
+    
+    ; Print free status
+    LDI ZL, lo8(free_msg)
+    LDI ZH, hi8(free_msg)
+    RCALL print_string
+    RCALL print_newline
+    RJMP status_printed
+    
+print_occupied:
+    ; Print occupied status
+    LDI ZL, lo8(occupied_msg)
+    LDI ZH, hi8(occupied_msg)
+    RCALL print_string
+    RCALL print_newline
+    
+status_printed:
+    ; Debug print the value being sent via SPI
+    LDI ZL, lo8(sending_msg)
+    LDI ZH, hi8(sending_msg)
+    RCALL print_string
+    MOV R18, R19
+    RCALL print_number
+    RCALL print_newline
+    
+skip_status_print:
+      ; Send status to slave via SPI
+    MOV R18, R19          ; Restore value to R18 for SPI
+    RCALL send_spi        ; Send to slave
+    
+    ; Calculate available spots and send to serial monitor
+    LDI R24, TOTAL_SPOTS   ; Start with all spots available
+    
+    ; Check spot 1
+    CPI R19, 1
+    BRNE send_to_monitor
+    DEC R24               ; Decrease available spots if occupied
+    
+send_to_monitor:
+    ; Only print available spots if status changed
+    CP R19, R26
+    BREQ skip_available_print
+    
+    ; Print available spots message
+    LDI ZL, lo8(available_msg)
+    LDI ZH, hi8(available_msg)
+    RCALL print_string
+    
+    ; Send available spots count to serial monitor
+    MOV R18, R24
+    RCALL print_number    ; Print available spots count
+    RCALL print_newline
+    
+skip_available_print:
+    RCALL delay_1000ms    ; Longer delay before next loop
+    RJMP main_loop
+    
+;==============================================================
+send_spi:
+; Function to send data via SPI
+; Input: R18 = data to send
+    PUSH R19
+    PUSH R20
 
-sensor_loop:
-    ; Trigger pulse on PDx (sensor #idx)
-    ldi r19, 1
-    mov r20, r19   ; mask = 1
-    tst r18        ; test idx
-    breq skip_shift
-shift_loop:
-    lsl r20        ; shift mask left
-    dec r18
-    brne shift_loop
-skip_shift:
-    ; Trigger pulse (10us)
-    out PORTD, r20
-    rcall delay_10us
-    clr r19
-    out PORTD, r19
-
-    ; Wait for ECHO (from PCx)
-    in r19, PINC
-wait_echo_start:
-    in r19, PINC
-    and r19, r20
-    breq wait_echo_start
-
-    ; Measure high time (pulse width)
-    clr r17        ; dist = 0
-wait_echo_end:
-    in r19, PINC
-    and r19, r20
-    breq done_measuring
-    inc r17
-    rjmp wait_echo_end
-
-done_measuring:
-    ; Compare with THRESHOLD
-    ldi r19, THRESHOLD
-    cp r17, r19
-    brlo slot_terisi
-
-slot_kosong:
-    inc r16        ; slot_cnt++
-    ; Green LED (PB0-PB3)
-    out PORTB, r20
-    rjmp lanjut
-
-slot_terisi:
-    ; Red LED (PB4-PB7)
-    mov r21, r20
-    lsl r21
-    lsl r21
-    lsl r21
-    lsl r21        ; shift left 4 bits
-    out PORTB, r21
-
-lanjut:
-    ; Increment index
-    inc r18
-    cpi r18, N_SLOTS
-    brlo sensor_loop
-
-    ; Send slot_cnt via USART
-    mov r20, r16
-    rcall send_usart
-
-    ; Delay between cycles
-    rcall delay_500ms
-
-    rjmp main_loop
-
-; =======================================
-; Subroutine to send byte in r20 via USART
-; =======================================
-send_usart:
-wait_udre:
-    lds r19, UCSR0A
-    sbrs r19, UDRE0
-    rjmp wait_udre
-    sts UDR0, r20
-    ret
-
-; Delay 10us
+    ; Only print debug messages if status changed
+    CP R19, R26
+    BREQ skip_spi_debug_msg
+    
+    ; Debug message
+    MOV R20, R18          ; Preserve data byte
+    LDI ZL, lo8(spi_sending_msg)
+    LDI ZH, hi8(spi_sending_msg)
+    RCALL print_string
+    MOV R18, R20
+    RCALL print_number
+    RCALL print_newline
+    RJMP continue_spi
+    
+skip_spi_debug_msg:
+    MOV R20, R18          ; Preserve data byte
+    
+continue_spi:
+    CBI PORTB, SS         ; Enable slave device (SS low)
+    
+    OUT SPDR, R20         ; Transmit byte to slave
+    
+spi_wait:
+    IN R19, SPSR
+    SBRS R19, SPIF        ; Wait for byte transmission
+    RJMP spi_wait         ; to complete
+    
+    SBI PORTB, SS         ; Disable slave device (SS high)
+    
+    ; Only print debug messages if status changed
+    CP R19, R26
+    BREQ skip_spi_complete_msg
+    
+    ; Debug message
+    LDI ZL, lo8(spi_complete_msg)
+    LDI ZH, hi8(spi_complete_msg)
+    RCALL print_string
+    RCALL print_newline
+    
+skip_spi_complete_msg:
+    POP R20
+    POP R19
+    RET
+;==============================================================
+check_echo_PB0:
+; Function to measure echo pulse width on PB0
+    LDI R20, 0b00000000
+    STS TCCR1A, R20       ; Timer 1 normal mode
+    LDI R20, 0b11000101   ; Set for rising edge detection &
+    STS TCCR1B, R20       ; prescaler=1024, noise cancellation ON
+    
+wait_rise_pb0:
+    IN R21, TIFR1
+    SBRS R21, ICF1
+    RJMP wait_rise_pb0    ; Loop until rising edge is detected
+    
+    LDS R16, ICR1L        ; Store count value at rising edge
+    
+    OUT TIFR1, R21        ; Clear flag for falling edge detection
+    LDI R20, 0b10000101
+    STS TCCR1B, R20       ; Set for falling edge detection
+    
+wait_fall_pb0:
+    IN R21, TIFR1
+    SBRS R21, ICF1
+    RJMP wait_fall_pb0    ; Loop until falling edge is detected
+    
+    LDS R28, ICR1L        ; Store count value at falling edge
+    
+    SUB R28, R16          ; Count diff R28 = R28 - R16
+    OUT TIFR1, R21        ; Clear flag for next sensor reading
+    RET
+;==============================================================
+uart_init:
+; Initialize UART for 9600 baud rate
+    LDI R17, 103          ; For 9600 baud @16MHz
+    STS UBRR0L, R17
+    LDI R17, 0
+    STS UBRR0H, R17
+    
+    LDI R17, (1<<TXEN0)   ; Enable transmitter
+    STS UCSR0B, R17
+    
+    LDI R17, (1<<UCSZ01)|(1<<UCSZ00) ; 8-bit data
+    STS UCSR0C, R17
+    RET
+;==============================================================
+send_char:
+; Send single character in R18 to UART
+    PUSH R19
+wait_tx_ready:
+    LDS R19, UCSR0A
+    SBRS R19, UDRE0       ; Wait if buffer is full
+    RJMP wait_tx_ready
+    
+    STS UDR0, R18         ; Send data
+    POP R19
+    RET
+;==============================================================
+print_string:
+; Print null-terminated string pointed to by Z register
+    PUSH R18
+print_string_loop:
+    LPM R18, Z+           ; Load character from program memory
+    CPI R18, 0            ; Check for null terminator
+    BREQ print_string_done
+    RCALL send_char       ; Send character
+    RJMP print_string_loop
+print_string_done:
+    POP R18
+    RET
+;==============================================================
+print_number:
+; Print number in R18 (0-255)
+    PUSH R18
+    PUSH R19
+    
+    CPI R18, 100          ; Check if number >= 100
+    BRLO tens_digit       ; If less than 100, skip to tens digit
+    
+    ; Print hundreds digit
+    LDI R19, '0'          ; Start with '0'
+hundreds_loop:
+    CPI R18, 100          ; Check if >= 100
+    BRLO hundreds_done    ; If < 100, done with hundreds
+    SUBI R18, 100         ; Subtract 100
+    INC R19               ; Increment digit
+    RJMP hundreds_loop    ; Continue loop
+hundreds_done:
+    PUSH R18              ; Save remainder
+    MOV R18, R19          ; Move hundreds digit to R18
+    RCALL send_char       ; Print hundreds digit
+    POP R18               ; Restore remainder
+    
+tens_digit:
+    CPI R18, 10           ; Check if number >= 10
+    BRLO ones_digit       ; If less than 10, skip to ones digit
+    
+    ; Print tens digit
+    LDI R19, '0'          ; Start with '0'
+tens_loop:
+    CPI R18, 10           ; Check if >= 10
+    BRLO tens_done        ; If < 10, done with tens
+    SUBI R18, 10          ; Subtract 10
+    INC R19               ; Increment digit
+    RJMP tens_loop        ; Continue loop
+tens_done:
+    PUSH R18              ; Save remainder
+    MOV R18, R19          ; Move tens digit to R18
+    RCALL send_char       ; Print tens digit
+    POP R18               ; Restore remainder
+    
+ones_digit:
+    ; Print ones digit
+    SUBI R18, -'0'        ; Convert to ASCII
+    RCALL send_char       ; Print ones digit
+    
+    POP R19
+    POP R18
+    RET
+;==============================================================
+print_newline:
+; Print newline and carriage return
+    PUSH R18
+    LDI R18, 0x0D         ; Carriage return
+    RCALL send_char
+    LDI R18, 0x0A         ; Line feed
+    RCALL send_char
+    POP R18
+    RET
+;==============================================================
 delay_10us:
-    ldi r19, 40
-delay10_loop:
-    dec r19
-    brne delay10_loop
-    ret
-
-; Delay ~500ms (rough)
+; 10 microsecond delay using Timer0
+    CLR R20
+    OUT TCNT0, R20        ; Initialize timer0 with count=0
+    LDI R20, 20
+    OUT OCR0A, R20        ; OCR0 = 20
+    LDI R20, 0b00001010
+    OUT TCCR0B, R20       ; Timer0: CTC mode, prescaler 8
+    
+delay_10us_loop:
+    IN R20, TIFR0
+    SBRS R20, OCF0A       ; If OCF0=1, skip next instruction
+    RJMP delay_10us_loop  ; Else, loop back & check OCF0 flag
+    
+    CLR R20
+    OUT TCCR0B, R20       ; Stop timer0
+    
+    LDI R20, (1<<OCF0A)
+    OUT TIFR0, R20        ; Clear OCF0 flag
+    RET
+;==============================================================
+delay_ms:
+; Short delay (milliseconds)
+    LDI R21, 10
+d1: LDI R22, 50
+d2: LDI R23, 50
+d3: DEC R23
+    BRNE d3
+    DEC R22
+    BRNE d2
+    DEC R21
+    BRNE d1
+    RET
+;==============================================================
 delay_500ms:
-    ldi r21, 50
-loop_500:
-    rcall delay_10ms
-    dec r21
-    brne loop_500
-    ret
+; Longer delay (500 milliseconds)
+    LDI R21, 100
+d4: LDI R22, 100
+d5: LDI R23, 100
+d6: DEC R23
+    BRNE d6
+    DEC R22
+    BRNE d5
+    DEC R21
+    BRNE d4
+    RET
+    
+;==============================================================
+delay_1000ms:
+; Longer delay (1000 milliseconds)
+    RCALL delay_500ms
+    RCALL delay_500ms
+    RET
+;==============================================================
 
-; Delay 10ms
-delay_10ms:
-    ldi r22, 200
-delay10ms_loop1:
-    ldi r23, 255
-delay10ms_loop2:
-    dec r23
-    brne delay10ms_loop2
-    dec r22
-    brne delay10ms_loop1
-    ret
+; String constants
+welcome_msg:
+    .ascii "Parking System Master Started"
+    .byte 0
+distance_msg:
+    .ascii "Distance: "
+    .byte 0
+raw_sensor_msg:
+    .ascii "Raw sensor value: "
+    .byte 0
+free_msg:
+    .ascii "Spot FREE"
+    .byte 0
+occupied_msg:
+    .ascii "Spot OCCUPIED"
+    .byte 0
+available_msg:
+    .ascii "Available spots: "
+    .byte 0
+sending_msg:
+    .ascii "Sending status to slave: "
+    .byte 0
+spi_initialized_msg:
+    .ascii "SPI initialized as master"
+    .byte 0
+spi_sending_msg:
+    .ascii "SPI sending byte: "
+    .byte 0
+spi_complete_msg:
+    .ascii "SPI transmission complete"
+    .byte 0
+sending_test_msg:
+    .ascii "Sending test SPI commands on startup"
+    .byte 0
+checking_sensor_msg:
+    .ascii "Checking ultrasonic sensor"
+    .byte 0
+separator_msg:
+    .ascii "----------------------------------------"
+    .byte 0
+status_change_msg:
+    .ascii "STATUS CHANGED!"
+    .byte 0
+;==============================================================
